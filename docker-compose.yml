@@ -1,0 +1,7 @@
+services:
+  vpnclient:
+    image: alpine
+    network_mode: none
+    labels:
+      wg-docker.enable: true
+    command: sh -c "until ping -c2 1.1.1.1 ; do sleep 1 ; done"

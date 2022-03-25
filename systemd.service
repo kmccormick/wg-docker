@@ -1,0 +1,12 @@
+[Unit]
+Description=Push wireguard connections into docker containers
+After=network.target docker.service
+Requires=network.target docker.service
+
+[Service]
+Type=exec
+EnvironmentFile=WORKDIR/credentials
+ExecStart=WORKDIR/wg-docker.py
+
+[Install]
+WantedBy=multi-user.target
