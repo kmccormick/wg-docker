@@ -9,21 +9,20 @@
 # check dns when checking connectivity
 # proper logging
 
+import os
 import json
 import requests
 import random
-import urllib
 import subprocess
-from requests.adapters import DEFAULT_POOLSIZE, DEFAULT_RETRIES, DEFAULT_POOLBLOCK
+import urllib.parse
 from uuid import uuid4
 from datetime import datetime, timedelta
-from os import environ
 
 import docker as dockerlib
 import python_wireguard
-import netns as larsks_netns
+import icmplib
+from netns import NetNS as SimpleNetNS
 from pyroute2 import netns, NetNS, NDB, IPRoute, WireGuard
-from icmplib import ping
 
 PIA_DEFAULT_REGION = 'ca_vancouver'
 PIA_CA_CERT = 'WORKDIR/ca.crt'
@@ -171,20 +170,18 @@ class PiaVpn:
 
 # use in-region api to get wireguard config
 class DNSOverrideAdapter(requests.adapters.HTTPAdapter):
-    def __init__(self, common_name, host, pool_connections=DEFAULT_POOLSIZE, pool_maxsize=DEFAULT_POOLSIZE,
-        max_retries=DEFAULT_RETRIES, pool_block=DEFAULT_POOLBLOCK):
+    def __init__(self, common_name, host, **kwargs):
         self.__common_name = common_name
         self.__host = host
-        super(DNSOverrideAdapter, self).__init__(pool_connections=pool_connections, pool_maxsize=pool_maxsize,
-            max_retries=max_retries, pool_block=pool_block)
+        super(DNSOverrideAdapter, self).__init__(**kwargs)
 
     def get_connection(self, url, proxies=None):
         redirected_url = url.replace(self.__common_name, self.__host)
         return super(DNSOverrideAdapter, self).get_connection(redirected_url, proxies=proxies)
 
-    def init_poolmanager(self, connections, maxsize, block=DEFAULT_POOLBLOCK, **pool_kwargs):
+    def init_poolmanager(self, connections, maxsize, **pool_kwargs):
         pool_kwargs['assert_hostname'] = self.__common_name
-        super(DNSOverrideAdapter, self).init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+        super(DNSOverrideAdapter, self).init_poolmanager(connections, maxsize, **pool_kwargs)
 
 def get_index(context, name):
     idx = context.link_lookup(ifname=name)
@@ -220,7 +217,7 @@ def wg_up(pid, iface, config, private_key):
         ns.addr('add', index=wg_idx, address=config['peer_ip'], mask=32)
 
     # set wireguard configuration on interface
-    with larsks_netns.NetNS(nsname=nsname):
+    with SimpleNetNS(nsname=nsname):
         nameservers = [ '{}/32'.format(ip) for ip in config['dns_servers'] ]
         peer = {
             'public_key': config['server_key'],
@@ -238,7 +235,7 @@ def wg_up(pid, iface, config, private_key):
         ns.route('replace', dst='0.0.0.0/0', oif=wg_idx)
 
     # show wireguard connection
-    with larsks_netns.NetNS(nsname=nsname) as ns:
+    with SimpleNetNS(nsname=nsname):
         print(subprocess.run(['wg','show'], capture_output=True).stdout)
 
     # discard netns name; container processes will hold it open unnamed
@@ -249,12 +246,12 @@ def wg_up(pid, iface, config, private_key):
 def check_netns_connectivity(nspid, iface):
     print('checking connectivity pid={} iface={}'.format(nspid, iface))
     try:
-        with larsks_netns.NetNS(nspid=nspid) as ns:
+        with SimpleNetNS(nspid=nspid):
             with IPRoute() as ip:
                 if get_index(ip, iface) < 0:
                     print('  iface={} does not exist, no connectivity')
                     return False
-            ip_ping = ping('1.1.1.1')
+            ip_ping = icmplib.ping('1.1.1.1')
             if ip_ping.packets_received > 0:
                 print('  ip connectivity confirmed, but not checking dns')
                 return True
@@ -290,7 +287,7 @@ def configure_container(container, pia):
 
 def main():
     # setup pia object and connect to docker
-    pia = PiaVpn(environ['PIA_USERNAME'], environ['PIA_PASSWORD'])
+    pia = PiaVpn(os.environ['PIA_USERNAME'], os.environ['PIA_PASSWORD'])
     docker = dockerlib.from_env()
 
     # check all containers for label on startup
@@ -308,10 +305,11 @@ def main():
     event_filter.update(LABEL_FILTER)
 
     print('startup complete, watching events')
-    for event in docker.events(filters=event_filter, decode=True, since=events_start):
+    for event in docker.events(filters=event_filter, decode=True,
+                               since=events_start):
         container = docker.containers.get(event['id'])
         print('container {} started...'.format(container.name))
-        configure_container(docker.containers.get(event['id']), pia)
+        configure_container(container, pia)
 
 
 if __name__ == "__main__":
