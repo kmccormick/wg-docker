@@ -280,6 +280,7 @@ def main():
     docker = dockerlib.from_env()
 
     # check all containers for label on startup
+    events_start = datetime.now()
     print('looking for existing containers')
     for container in docker.containers.list(filters=LABEL_FILTER):
         print('container {} running on startup...'.format(container.name))
@@ -293,7 +294,7 @@ def main():
     event_filter.update(LABEL_FILTER)
 
     print('startup complete, watching events')
-    for event in docker.events(filters=event_filter, decode=True):
+    for event in docker.events(filters=event_filter, decode=True, since=events_start):
         container = docker.containers.get(event['id'])
         print('container {} started...'.format(container.name))
         configure_container(docker.containers.get(event['id']), pia)
