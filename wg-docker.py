@@ -2,7 +2,6 @@
 
 # TODO
 # manage ca certificate
-# eliminate subprocess call to `wg set`
 # eliminate default region - pick one??
 # generate PUBLIC_IPS by inverting rfc1918?
 # ipv6 support
@@ -16,7 +15,6 @@ import random
 import urllib
 import subprocess
 from requests.adapters import DEFAULT_POOLSIZE, DEFAULT_RETRIES, DEFAULT_POOLBLOCK
-from tempfile import NamedTemporaryFile
 from uuid import uuid4
 from datetime import datetime, timedelta
 from os import environ
@@ -222,20 +220,16 @@ def wg_up(pid, iface, config, private_key):
         ns.addr('add', index=wg_idx, address=config['peer_ip'], mask=32)
 
     # set wireguard configuration on interface
-    with larsks_netns.NetNS(nsname=nsname) as ns, NamedTemporaryFile() as keyfile:
-        keyfile.write(str(private_key).encode())
-        keyfile.flush()
-        allowed_ips = ','.join(PUBLIC_IPS + config['dns_servers'])
-        command = [
-            'wg', 'set', iface,
-            'private-key', keyfile.name,
-            'peer', config['server_key'],
-            'endpoint', '{ip}:{port}'.format(ip=config['server_ip'],
-                                             port=config['server_port']),
-            'allowed-ips', allowed_ips,
-        ]
-        wg = subprocess.run(command, capture_output=True)
-        print(wg.stdout)
+    with larsks_netns.NetNS(nsname=nsname):
+        nameservers = [ '{}/32'.format(ip) for ip in config['dns_servers'] ]
+        peer = {
+            'public_key': config['server_key'],
+            'endpoint_addr': config['server_ip'],
+            'endpoint_port': config['server_port'],
+            'allowed_ips': PUBLIC_IPS + nameservers,
+        }
+        wg = WireGuard()
+        wg.set(iface, private_key=str(private_key), peer=peer)
 
     # bring interface up and set default route
     with NetNS(nsname) as ns:
