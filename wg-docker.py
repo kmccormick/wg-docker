@@ -12,27 +12,30 @@ import python_wireguard
 import icmplib
 from netns import NetNS as SimpleNetNS
 from pyroute2 import NetNS, IPRoute, WireGuard
+from netaddr import IPSet
 
 PIA_DEFAULT_REGION = 'ca_vancouver'
 PIA_CA_CERT = 'WORKDIR/ca.crt'
 INTERFACE_PREFIX = 'wg-'
 LABEL_FILTER = {'label': 'wg-docker.enable=true'}
 
-PUBLIC_IPS = [
-    # 0.0.0.0-9.255.255.255
-    '0.0.0.0/5', '8.0.0.0/7',
-    # 11.0.0.0-172.15.255.255
-    '11.0.0.0/8', '12.0.0.0/6', '16.0.0.0/4', '32.0.0.0/3', '64.0.0.0/2',
-    '128.0.0.0/3', '160.0.0.0/5', '168.0.0.0/6', '172.0.0.0/12',
-    # 172.32.0.0-192.167.255.255
-    '172.32.0.0/11', '172.64.0.0/10', '172.128.0.0/9', '173.0.0.0/8',
-    '174.0.0.0/7', '176.0.0.0/4', '192.0.0.0/9', '192.128.0.0/11',
-    '192.160.0.0/13',
-    # 192.169.0.0-223.255.255.255
-    '192.169.0.0/16', '192.170.0.0/15', '192.172.0.0/14', '192.176.0.0/12',
-    '192.192.0.0/10', '193.0.0.0/8', '194.0.0.0/7', '196.0.0.0/6',
-    '200.0.0.0/5', '208.0.0.0/4',
-]
+# IPV4 non-routable space from RFC6890 / https://en.wikipedia.org/wiki/Reserved_IP_addresses
+IPV4_NON_ROUTABLE = IPSet([
+    '0.0.0.0/8',       #Current network
+    '10.0.0.0/8',      #Private network
+    '100.64.0.0/10',   #Private network (CGNAT)
+    '127.0.0.0/8',     #Loopback
+    '169.254.0.0/16',  #Link-local
+    '172.16.0.0/12',   #Private network
+    '192.0.0.0/24',    #Private network (IETF Protocol Assignments)
+    '192.0.2.0/24',    #Documentation
+    '192.168.0.0/16',  #Private network
+    '198.18.0.0/15',   #Benchmark
+    '198.51.100.0/24', #Documentation
+    '203.0.113.0/24',  #Documentation
+    '233.252.0.0/24',  #Documentation
+])
+IPV4_ROUTABLE = [ str(net) for net in (IPSet(['0.0.0.0/0']) ^ IPV4_NON_ROUTABLE).iter_cidrs() ]
 
 class NamespaceClosedError(Exception):
     pass
@@ -233,7 +236,7 @@ def wg_up(iface, config, private_key, nspath):
             'public_key': config['server_key'],
             'endpoint_addr': config['server_ip'],
             'endpoint_port': config['server_port'],
-            'allowed_ips': PUBLIC_IPS + nameservers,
+            'allowed_ips': IPV4_ROUTABLE + nameservers,
         }
         wg = WireGuard()
         wg.set(iface, private_key=str(private_key), peer=peer)

@@ -1,5 +1,6 @@
 docker
 icmplib
+netaddr
 netns
 pyroute2
 python-wireguard
