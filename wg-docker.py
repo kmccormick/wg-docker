@@ -246,10 +246,12 @@ def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
     ('  connectivity not confirmed, returning False')
     return False
 
-def set_resolvconf(container, nameservers):
+def set_resolvconf(container, nameservers, search=None):
     resolvconf = container.attrs['ResolvConfPath']
     print('setting nameservers for {} at {}'.format(container.name, resolvconf))
     with open(resolvconf, 'w') as f:
+        if search:
+            f.write('search {}\n'.format(search))
         for ns in nameservers:
             f.write('nameserver {}\n'.format(ns))
     with open(resolvconf, 'r') as f:
