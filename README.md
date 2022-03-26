@@ -59,10 +59,14 @@ docker-compose.yml:
         labels:
           wg-docker.enable: true
         command: sh -c "until ping -c2 1.1.1.1 ; do sleep 1 ; done"
+
+For containers that need to communicate with other local containers but not the
+host, I suggest using the ipvlan driver with internal=true. This creates a dummy
+interface on the host to be the parent of the ipvlan interface. The host does
+not have an address on that network.
       
 ## TODO
 * eliminate subprocess call to `wg set`
-* create firewall rules to block traffic from internal networks
 * eliminate default region - pick one??
 * generate PUBLIC_IPS by inverting rfc1918?
 * ipv6 support

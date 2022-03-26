@@ -3,7 +3,6 @@
 # TODO
 # manage ca certificate
 # eliminate subprocess call to `wg set`
-# create firewall rules to block traffic from internal networks
 # eliminate default region - pick one??
 # generate PUBLIC_IPS by inverting rfc1918?
 # ipv6 support
@@ -272,16 +271,8 @@ def configure_container(container, pia):
             config = pia.get_config(region, public)
             wg_up(pid, iface, config, private)
             set_resolvconf(container, config['dns_servers'])
-            set_firewall(container)
     except NamespaceClosedError:
         print('container namespace was closed before setup complete')
-
-def set_firewall(container):
-    networks = [ n['NetworkID'] for n in
-                container.attrs['NetworkSettings']['Networks'].values() ]
-    for network in networks:
-        iface = 'br-{}'.format(network[0:12])
-        print('NOT IMPLEMENTED: set firewall for {}'.format(iface))
 
 def main():
     # setup pia object and connect to docker
