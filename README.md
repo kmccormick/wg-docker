@@ -74,5 +74,4 @@ not have an address on that network.
 * check dns when checking connectivity
 * proper logging
 * can this all be done in a container? --privileged & CAP_NET_ADMIN?
-* serverlist & token use common cache class
 * use docker netns fd in NetworkSettings.SandboxKey: /var/run/docker/netns/xxxxxx

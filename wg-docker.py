@@ -51,6 +51,25 @@ PUBLIC_IPS = [
 class NamespaceClosedError(Exception):
     pass
 
+class CacheExpiredError(Exception):
+    pass
+
+class CachedValue:
+    def __init__(self, value, expire_in):
+        self.update(value, expire_in)
+
+    def is_valid(self):
+        return datetime.now() < self.expire
+
+    def value(self):
+        if not self.is_valid():
+            raise CacheExpiredError()
+        return self._value
+
+    def update(self, value, expire_in):
+        self.expire = datetime.now() + expire_in
+        self._value = value
+
 class PiaVpn:
     '''
     This class handles connecting to Private Internet Access APIs and
@@ -64,13 +83,11 @@ class PiaVpn:
     conn_types = ('wg')
 
     serverlist = None
-    serverlist_expire = None
     cachetime = timedelta(days=1)
 
     def __init__(self, user, password, conn_type='wg'):
         self.auth = (user, password)
         self.token = None
-        self.token_expire = None
         if conn_type in self.conn_types:
             self.conn_type = conn_type
         else:
@@ -80,31 +97,33 @@ class PiaVpn:
     def _update_serverlist(cls):
         rsp = requests.get(cls.serverlist_url)
         rsp.raise_for_status()
-        cls.serverlist = json.loads(rsp.text.split('\n')[0])
-        cls.serverlist_expire = datetime.now() + cls.cachetime
+        ret = json.loads(rsp.text.split('\n')[0])
+        cls.serverlist = CachedValue(ret, cls.cachetime)
+        return ret
 
     @classmethod
     def get_serverlist(cls, cached=True):
         if not cached:
             print('updating serverlist: forced')
-            cls._update_serverlist()
-        elif not cls.serverlist:
+            return cls._update_serverlist()
+
+        try:
+            return cls.serverlist.value()
+        except AttributeError:
             print('updating serverlist: first time')
-            cls._update_serverlist()
-        elif cls.serverlist_expire and datetime.now() > cls.serverlist_expire:
+        except CacheExpiredError:
             print('updating serverlist: cached data expired')
-            cls._update_serverlist()
-        else:
-            print('skipping serverlist update: cache valid')
-        return cls.serverlist
+
+        return cls._update_serverlist()
 
     def get_ports(self, cached=True):
         self.get_serverlist(cached)
-        return self.serverlist['groups'][self.conn_type][0]['ports']
+        return self.serverlist.value()['groups'][self.conn_type][0]['ports']
 
     def get_region_servers(self, region, cached=True):
         self.get_serverlist(cached)
-        region_data = next(filter(lambda x: x['id'] == region, self.serverlist['regions']))
+        region_data = next(filter(lambda x: x['id'] == region,
+                                  self.serverlist.value()['regions']))
         return region_data['servers'][self.conn_type]
 
     def get_random_server(self, region, cached=True):
@@ -116,22 +135,23 @@ class PiaVpn:
         data = rsp.json()
         if data['status'] != 'OK':
             raise RuntimeError('Could not get token: {}'.format(data))
-        self.token = data['token']
-        self.token_expire = datetime.now() + self.cachetime
+        ret = data['token']
+        self.token = CachedValue(ret, self.cachetime)
+        return ret
 
     def get_token(self, cached=True):
         if not cached:
             print('updating token: forced')
-            self._update_token()
-        elif not self.token:
+            return self._update_token()
+
+        try:
+            return self.token.value()
+        except AttributeError:
             print('updating token: first time')
-            self._update_token()
-        elif self.token_expire and datetime.now() > self.token_expire:
+        except CacheExpiredError:
             print('updating token: cached data expired')
-            self._update_token()
-        else:
-            print('skipping token update: cache valid')
-        return self.token
+
+        return self._update_token()
 
     def get_config(self, region, public_key):
         server = self.get_random_server(region)
