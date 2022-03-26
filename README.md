@@ -66,6 +66,7 @@ interface on the host to be the parent of the ipvlan interface. The host does
 not have an address on that network.
       
 ## TODO
+* manage ca certificate
 * generate PUBLIC_IPS by inverting rfc1918?
 * ipv6 support
 * check dns when checking connectivity

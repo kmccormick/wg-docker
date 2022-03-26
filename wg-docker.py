@@ -1,12 +1,5 @@
 #!WORKDIR/.venv/bin/python -u
 
-# TODO
-# manage ca certificate
-# generate PUBLIC_IPS by inverting rfc1918?
-# ipv6 support
-# check dns when checking connectivity
-# proper logging
-
 import os
 import json
 import requests
@@ -48,6 +41,11 @@ class CacheExpiredError(Exception):
     pass
 
 class CachedValue:
+    '''
+    Pass a value and a timedelta, and the value will be returned until the
+    timedelta has elapsed. Attempts to access the value past its expiration
+    will raise CacheExpiredError.
+    '''
     def __init__(self, value, expire_in):
         self.update(value, expire_in)
 
@@ -88,6 +86,7 @@ class PiaVpn:
 
     @classmethod
     def _update_serverlist(cls):
+        'get serverlist from api and cache it'
         rsp = requests.get(cls.serverlist_url)
         rsp.raise_for_status()
         ret = json.loads(rsp.text.split('\n')[0])
@@ -96,6 +95,7 @@ class PiaVpn:
 
     @classmethod
     def get_serverlist(cls, cached=True):
+        'get serverlist from cache or api'
         if not cached:
             print('updating serverlist: forced')
             return cls._update_serverlist()
@@ -123,6 +123,7 @@ class PiaVpn:
         return random.choice(self.get_region_servers(region, cached))
 
     def _update_token(self):
+        'get token from api and cache it'
         rsp = requests.post(self.token_url, auth=self.auth)
         rsp.raise_for_status()
         data = rsp.json()
@@ -133,6 +134,7 @@ class PiaVpn:
         return ret
 
     def get_token(self, cached=True):
+        'get token from cache or api'
         if not cached:
             print('updating token: forced')
             return self._update_token()
@@ -147,6 +149,7 @@ class PiaVpn:
         return self._update_token()
 
     def get_config(self, region, public_key):
+        'use in-region api to get wireguard config'
         server = self.get_random_server(region)
         port = self.get_ports()[0]
 
@@ -164,8 +167,13 @@ class PiaVpn:
         rsp = config_sess.get('{}?{}'.format(config_url, config_query), verify=PIA_CA_CERT)
         return rsp.json()
 
-# use in-region api to get wireguard config
 class DNSOverrideAdapter(requests.adapters.HTTPAdapter):
+    '''
+    This adapter intercepts requests made to common_name and connects to host
+    instead. Any SSL checks will be performed against common_name, not host.
+    This is useful if common_name is not in DNS and for mismatched SSL
+    certificates.
+    '''
     def __init__(self, common_name, host, **kwargs):
         self.__common_name = common_name
         self.__host = host
@@ -180,13 +188,19 @@ class DNSOverrideAdapter(requests.adapters.HTTPAdapter):
         super(DNSOverrideAdapter, self).init_poolmanager(connections, maxsize, **pool_kwargs)
 
 def get_index(context, name):
+    '''
+    Gets an interface index by its name from a pyroute2 context. Works with both
+    IPRoute and NetNS contexts.
+    '''
     idx = context.link_lookup(ifname=name)
     if len(idx) == 1:
         return idx[0]
     return -1
 
 def wg_up(iface, config, private_key, nspath):
-
+    '''
+    Create, set netns, and configure a WireGuard interface in the nspath netns.
+    '''
     with IPRoute() as ip, NetNS(nspath) as ns:
 
         # create interface and move to netns, if necessary
@@ -210,6 +224,8 @@ def wg_up(iface, config, private_key, nspath):
         ns.addr('add', index=wg_idx, address=config['peer_ip'], mask=32)
 
     # set wireguard configuration on interface
+    # Use larsks's NetNS here because pyroute2's WireGuard and NetNS don't seem
+    # to interoperate.
     with SimpleNetNS(nspath=nspath):
         nameservers = [ '{}/32'.format(ip) for ip in config['dns_servers'] ]
         peer = {
@@ -228,8 +244,15 @@ def wg_up(iface, config, private_key, nspath):
         ns.route('replace', dst='0.0.0.0/0', oif=wg_idx)
 
 def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
+    '''
+    Check for connectivity to a host (default 1.1.1.1) inside a netns. The iface
+    is only checked for existence as an early out. If the iface exists but is
+    unconfigured, and the netns has other connectivity to the host, this will not
+    detect the unconfigured/misconfigured iface.
+    '''
     print('checking connectivity nspath={} iface={}'.format(nspath, iface))
     try:
+        # use larsks's NetNS here for both IPRoute and icmplib.ping
         with SimpleNetNS(nspath=nspath):
             with IPRoute() as ip:
                 if get_index(ip, iface) < 0:
@@ -247,6 +270,10 @@ def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
     return False
 
 def set_resolvconf(container, nameservers, search=None):
+    '''
+    Overwrite container's resolv.conf with the specified nameservers and
+    optional search path.
+    '''
     resolvconf = container.attrs['ResolvConfPath']
     print('setting nameservers for {} at {}'.format(container.name, resolvconf))
     with open(resolvconf, 'w') as f:
@@ -258,6 +285,11 @@ def set_resolvconf(container, nameservers, search=None):
         print(f.read())
 
 def configure_container(container, pia):
+    '''
+    Main flow for configuring/connecting a single container. Determines its
+    netns, checks to see if it already has connectivity, and then configures the
+    WireGuard connection if not.
+    '''
     print('configuring container {}'.format(container.name))
     nspath = container.attrs['NetworkSettings']['SandboxKey']
     iface = '{}{}'.format(INTERFACE_PREFIX, container.name)[0:15]
@@ -272,6 +304,11 @@ def configure_container(container, pia):
         print('container namespace was closed before setup complete')
 
 def main():
+    '''
+    Checks first for already running containers, and configures them. Then
+    transitions to waiting for docker container start events, and configures
+    containers as they start.
+    '''
     # setup pia object and connect to docker
     pia = PiaVpn(os.environ['PIA_USERNAME'], os.environ['PIA_PASSWORD'])
     docker = dockerlib.from_env()
