@@ -227,7 +227,7 @@ def wg_up(iface, config, private_key, nspath):
         ns.link('set', index=wg_idx, state='up')
         ns.route('replace', dst='0.0.0.0/0', oif=wg_idx)
 
-def check_netns_connectivity(nspath, iface):
+def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
     print('checking connectivity nspath={} iface={}'.format(nspath, iface))
     try:
         with SimpleNetNS(nspath=nspath):
@@ -235,12 +235,12 @@ def check_netns_connectivity(nspath, iface):
                 if get_index(ip, iface) < 0:
                     print('  iface={} does not exist, no connectivity'.format(iface))
                     return False
-            ip_ping = icmplib.ping('1.1.1.1')
+            ip_ping = icmplib.ping(host)
             if ip_ping.packets_received > 0:
-                print('  ip connectivity confirmed, but not checking dns')
+                print('  connectivity to {} confirmed'.format(host))
                 return True
             else:
-                print('  no ip connectivity')
+                print('  no ip connectivity to {}'.format(host))
     except ValueError:
         raise NamespaceClosedError()
     ('  connectivity not confirmed, returning False')
