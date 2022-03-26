@@ -66,11 +66,8 @@ interface on the host to be the parent of the ipvlan interface. The host does
 not have an address on that network.
       
 ## TODO
-* eliminate default region - pick one??
 * generate PUBLIC_IPS by inverting rfc1918?
 * ipv6 support
-* cleanup netns name after operation
 * check dns when checking connectivity
 * proper logging
 * can this all be done in a container? --privileged & CAP_NET_ADMIN?
-* use docker netns fd in NetworkSettings.SandboxKey: /var/run/docker/netns/xxxxxx

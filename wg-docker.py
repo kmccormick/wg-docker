@@ -2,10 +2,8 @@
 
 # TODO
 # manage ca certificate
-# eliminate default region - pick one??
 # generate PUBLIC_IPS by inverting rfc1918?
 # ipv6 support
-# remove netns name
 # check dns when checking connectivity
 # proper logging
 
@@ -13,16 +11,14 @@ import os
 import json
 import requests
 import random
-import subprocess
 import urllib.parse
-from uuid import uuid4
 from datetime import datetime, timedelta
 
 import docker as dockerlib
 import python_wireguard
 import icmplib
 from netns import NetNS as SimpleNetNS
-from pyroute2 import netns, NetNS, NDB, IPRoute, WireGuard
+from pyroute2 import NetNS, IPRoute, WireGuard
 
 PIA_DEFAULT_REGION = 'ca_vancouver'
 PIA_CA_CERT = 'WORKDIR/ca.crt'
@@ -189,12 +185,9 @@ def get_index(context, name):
         return idx[0]
     return -1
 
-def wg_up(pid, iface, config, private_key):
+def wg_up(iface, config, private_key, nspath):
 
-    nsname = str(uuid4())
-    netns.attach(nsname, pid)
-
-    with IPRoute() as ip, NetNS(nsname) as ns:
+    with IPRoute() as ip, NetNS(nspath) as ns:
 
         # create interface and move to netns, if necessary
         wg_idx = get_index(ns, iface)
@@ -206,7 +199,7 @@ def wg_up(pid, iface, config, private_key):
                 ip.link('add', ifname=iface, kind='wireguard')
                 wg_idx_ip = get_index(ip, iface)
                 print('added "{}" to localhost with index {}'.format(iface, wg_idx_ip))
-            ip.link('set', index=wg_idx_ip, net_ns_fd=nsname)
+            ip.link('set', index=wg_idx_ip, net_ns_fd=nspath)
             wg_idx = get_index(ns, iface)
             print('moved "{}" to netns with index {}'.format(iface, wg_idx))
         else:
@@ -217,7 +210,7 @@ def wg_up(pid, iface, config, private_key):
         ns.addr('add', index=wg_idx, address=config['peer_ip'], mask=32)
 
     # set wireguard configuration on interface
-    with SimpleNetNS(nsname=nsname):
+    with SimpleNetNS(nspath=nspath):
         nameservers = [ '{}/32'.format(ip) for ip in config['dns_servers'] ]
         peer = {
             'public_key': config['server_key'],
@@ -229,27 +222,18 @@ def wg_up(pid, iface, config, private_key):
         wg.set(iface, private_key=str(private_key), peer=peer)
 
     # bring interface up and set default route
-    with NetNS(nsname) as ns:
+    with NetNS(nspath) as ns:
         wg_idx = get_index(ns, iface)
         ns.link('set', index=wg_idx, state='up')
         ns.route('replace', dst='0.0.0.0/0', oif=wg_idx)
 
-    # show wireguard connection
-    with SimpleNetNS(nsname=nsname):
-        print(subprocess.run(['wg','show'], capture_output=True).stdout)
-
-    # discard netns name; container processes will hold it open unnamed
-    ns = NetNS(nsname)
-    ns.close()
-    ns.remove()
-
-def check_netns_connectivity(nspid, iface):
-    print('checking connectivity pid={} iface={}'.format(nspid, iface))
+def check_netns_connectivity(nspath, iface):
+    print('checking connectivity nspath={} iface={}'.format(nspath, iface))
     try:
-        with SimpleNetNS(nspid=nspid):
+        with SimpleNetNS(nspath=nspath):
             with IPRoute() as ip:
                 if get_index(ip, iface) < 0:
-                    print('  iface={} does not exist, no connectivity')
+                    print('  iface={} does not exist, no connectivity'.format(iface))
                     return False
             ip_ping = icmplib.ping('1.1.1.1')
             if ip_ping.packets_received > 0:
@@ -273,14 +257,14 @@ def set_resolvconf(container, nameservers):
 
 def configure_container(container, pia):
     print('configuring container {}'.format(container.name))
-    pid = container.attrs['State']['Pid']
+    nspath = container.attrs['NetworkSettings']['SandboxKey']
     iface = '{}{}'.format(INTERFACE_PREFIX, container.name)[0:15]
     try:
-        if not check_netns_connectivity(pid, iface):
+        if not check_netns_connectivity(nspath, iface):
             private, public = python_wireguard.Key.key_pair()
             region = container.labels.get('wg-docker.region', PIA_DEFAULT_REGION)
             config = pia.get_config(region, public)
-            wg_up(pid, iface, config, private)
+            wg_up(iface, config, private, nspath)
             set_resolvconf(container, config['dns_servers'])
     except NamespaceClosedError:
         print('container namespace was closed before setup complete')
