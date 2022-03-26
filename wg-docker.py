@@ -165,6 +165,7 @@ class PiaVpn:
         config_sess = requests.Session()
         config_sess.mount(config_url, DNSOverrideAdapter(server['cn'], server['ip']))
         rsp = config_sess.get('{}?{}'.format(config_url, config_query), verify=PIA_CA_CERT)
+        rsp.raise_for_status()
         return rsp.json()
 
 class DNSOverrideAdapter(requests.adapters.HTTPAdapter):
