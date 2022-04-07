@@ -11,6 +11,7 @@ from tempfile import NamedTemporaryFile
 import docker as dockerlib
 import python_wireguard
 import icmplib
+import dns.resolver
 from netns import NetNS as SimpleNetNS
 from pyroute2 import NetNS, IPRoute, WireGuard
 from netaddr import IPSet
@@ -298,7 +299,7 @@ def wg_up(iface, config, private_key, nspath):
         ns.link('set', index=wg_idx, state='up')
         ns.route('replace', dst='0.0.0.0/0', oif=wg_idx)
 
-def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
+def check_netns_connectivity(nspath, iface=None, test_ip='1.1.1.1', resolvconf=None):
     '''
     Check for connectivity to a host (default 1.1.1.1) inside a netns. The iface
     is only checked for existence as an early out. If the iface exists but is
@@ -309,16 +310,32 @@ def check_netns_connectivity(nspath, iface, host='1.1.1.1'):
     try:
         # use larsks's NetNS here for both IPRoute and icmplib.ping
         with SimpleNetNS(nspath=nspath):
-            with IPRoute() as ip:
-                if get_index(ip, iface) < 0:
-                    print('  iface={} does not exist, no connectivity'.format(iface))
-                    return False
-            ip_ping = icmplib.ping(host)
+            if iface:
+                with IPRoute() as ip:
+                    if get_index(ip, iface) < 0:
+                        print('  iface={} does not exist, no connectivity'.format(iface))
+                        return False
+            ip_ping = icmplib.ping(test_ip)
             if ip_ping.packets_received > 0:
-                print('  connectivity to {} confirmed'.format(host))
-                return True
+                print('  ip connectivity to {} confirmed'.format(test_ip))
+                print('  checking dns')
+                if resolvconf:
+                    resolver = dns.resolver.Resolver(filename=resolvconf,
+                                                     configure=True)
+                else:
+                    resolver = dns.resolver
+                try:
+                    result = resolver.resolve_address(test_ip)
+                    print('  dns connectivity confirmed')
+                    return True
+                except dns.resolver.LifetimeTimeout:
+                    print('  dns server timeout')
+                    return False
+                except dns.resolver.NXDOMAIN:
+                    print('  dns server NXDOMAIN, but connectivity confirmed')
+                    return True
             else:
-                print('  no ip connectivity to {}'.format(host))
+                print('  no ip connectivity to {}'.format(test_ip))
     except ValueError:
         raise NamespaceClosedError()
     ('  connectivity not confirmed, returning False')
@@ -347,9 +364,10 @@ def configure_container(container, pia):
     '''
     print('configuring container {}'.format(container.name))
     nspath = container.attrs['NetworkSettings']['SandboxKey']
+    resolvconf = container.attrs['ResolvConfPath']
     iface = '{}{}'.format(INTERFACE_PREFIX, container.name)[0:15]
     try:
-        if not check_netns_connectivity(nspath, iface):
+        if not check_netns_connectivity(nspath, iface=iface, resolvconf=resolvconf):
             private, public = python_wireguard.Key.key_pair()
             region = container.labels.get('wg-docker.region', PIA_DEFAULT_REGION)
             config = pia.get_config(region, public)

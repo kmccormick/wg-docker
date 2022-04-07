@@ -67,6 +67,5 @@ not have an address on that network.
       
 ## TODO
 * ipv6 support
-* check dns when checking connectivity
 * proper logging
 * can this all be done in a container? --privileged & CAP_NET_ADMIN?
